@@ -1,4 +1,4 @@
-"""W5 fixture base: /a + /c 两个 SQLi。"""
+"""W5 fixture head: /a 保留、/b 新增、/c 删除。"""
 import sqlite3
 
 from flask import Flask, request
@@ -15,6 +15,7 @@ from routes.r09 import bp as r09
 from routes.r10 import bp as r10
 from routes.r11 import bp as r11
 from routes.r12 import bp as r12
+from new import bp as new_bp
 
 app = Flask(__name__)
     app.register_blueprint(r01)
@@ -29,6 +30,7 @@ app = Flask(__name__)
     app.register_blueprint(r10)
     app.register_blueprint(r11)
     app.register_blueprint(r12)
+    app.register_blueprint(new_bp)
 
 
 @app.route("/a")
@@ -36,10 +38,3 @@ def a():
     uid = request.args.get("id", "")
     conn = sqlite3.connect(":memory:")
     return str(conn.execute("SELECT * FROM users WHERE id = " + uid).fetchall())
-
-
-@app.route("/c")
-def c():
-    name = request.args.get("name", "")
-    conn = sqlite3.connect(":memory:")
-    return str(conn.execute("SELECT * FROM users WHERE name = '" + name + "'").fetchall())
