@@ -1,0 +1,86 @@
+# SecAuditAgent CI 门禁 —— 自托管 runner 验证版（w5_fixture 公共仓）
+name: secaudit-agent-ci
+
+on:
+  push:
+    branches: [ci-secaudit-test]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  SECAUDIT_API: http://localhost:8001   # 本机后端；鉴权当前关闭
+  FAIL_ON_SEVERITY: high
+  POLL_TIMEOUT_S: "1800"
+  POLL_INTERVAL_S: "10"
+
+jobs:
+  audit-gate:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 1. 打包源码
+        run: git archive --format=zip -o "$RUNNER_TEMP/project.zip" HEAD
+
+      - name: 2. 发起扫描
+        id: start
+        run: |
+          set -euo pipefail
+          resp=$(curl -fsS --noproxy '*' -X POST "$SECAUDIT_API/audit/agentic/archive" \
+            -F "file=@$RUNNER_TEMP/project.zip" \
+            -F "task_name=ci-${GITHUB_SHA::8}")
+          tid=$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["task_id"])')
+          echo "task_id=$tid" | tee "$GITHUB_OUTPUT"
+          echo "已发起扫描：$tid"
+
+      - name: 3. 轮询完成并取结果
+        env:
+          TASK_ID: ${{ steps.start.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + POLL_TIMEOUT_S ))
+          while :; do
+            body=$(curl -fsS --noproxy '*' "$SECAUDIT_API/audit/agentic/result/$TASK_ID")
+            st=$(printf '%s' "$body" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))')
+            echo "轮询状态：$st"
+            case "$st" in
+              running) ;;
+              *) printf '%s' "$body" > "$RUNNER_TEMP/result.json"; break ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::扫描超时（>${POLL_TIMEOUT_S}s）"; exit 2
+            fi
+            sleep "$POLL_INTERVAL_S"
+          done
+
+      - name: 4. 拉取 SARIF
+        id: sarif
+        if: always() && steps.start.outcome == 'success'
+        env:
+          TASK_ID: ${{ steps.start.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          if curl -fsS --noproxy '*' "$SECAUDIT_API/audit/sarif/$TASK_ID" \
+               -o "$RUNNER_TEMP/result.sarif"; then
+            echo "present=true" | tee "$GITHUB_OUTPUT"
+          fi
+      - name: 4b. 提交到 code scanning
+        if: always() && steps.sarif.outputs.present == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ runner.temp }}/result.sarif
+          category: secaudit-agent
+
+      - name: 5. 门禁判定
+        run: |
+          python .github/secaudit/scripts/sec_gate.py \
+            --result "$RUNNER_TEMP/result.json" \
+            --fail-on-severity "$FAIL_ON_SEVERITY"
