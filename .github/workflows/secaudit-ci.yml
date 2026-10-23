@@ -23,10 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: 1. 打包源码
         run: git archive --format=zip -o "$RUNNER_TEMP/project.zip" HEAD
 
@@ -81,6 +77,6 @@ jobs:
 
       - name: 5. 门禁判定
         run: |
-          python .github/secaudit/scripts/sec_gate.py \
+          python3 .github/secaudit/scripts/sec_gate.py \
             --result "$RUNNER_TEMP/result.json" \
             --fail-on-severity "$FAIL_ON_SEVERITY"
